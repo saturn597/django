@@ -1,6 +1,6 @@
-============================================
-Django 1.6 release notes - UNDER DEVELOPMENT
-============================================
+=========================
+ Django 1.6 release notes
+=========================
 
 .. note::
 
@@ -19,6 +19,8 @@ Django 1.6 release notes - UNDER DEVELOPMENT
     This release of Django is for Malcolm.
 
     -- The Django Developers
+
+*November 6, 2013*
 
 Welcome to Django 1.6!
 
@@ -368,9 +370,9 @@ Minor features
 * The default iteration count for the PBKDF2 password hasher has been
   increased by 20%. This backwards compatible change will not affect
   existing passwords or users who have subclassed
-  `django.contrib.auth.hashers.PBKDF2PasswordHasher`` to change the
-  default value.
-
+  ``django.contrib.auth.hashers.PBKDF2PasswordHasher`` to change the
+  default value. Passwords :ref:`will be upgraded <password-upgrades>` to use
+  the new iteration count as necessary.
 
 * ``truncatechars_html`` template filter. This new filter truncates a string
   to be no longer than the specified number of characters, taking HTML into
@@ -446,6 +448,29 @@ to fully restore the old test behavior. ``DjangoTestSuiteRunner`` is deprecated
 but will not be removed from Django until version 1.8.
 
 .. _recommendations in the Python documentation: http://docs.python.org/2/library/doctest.html#unittest-api
+
+Custom User models in tests
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The introduction of the new test runner has also slightly changed the way that
+test models are imported. As a result, any test that overrides ``AUTH_USER_MODEL``
+to test behavior with one of Django's test user models (
+:class:`~django.contrib.auth.tests.custom_user.CustomUser` and
+:class:`~django.contrib.auth.tests.custom_user.ExtensionUser`) must now
+explicitly import the User model in your test module::
+
+    from django.contrib.auth.tests.custom_user import CustomUser
+
+    @override_settings(AUTH_USER_MODEL='auth.CustomUser')
+    class CustomUserFeatureTests(TestCase):
+        def test_something(self):
+            # Test code here ...
+
+This import forces the custom user model to be registered. Without this import,
+the test will be unable to swap in the custom user model, and you will get an
+error reporting::
+
+    ImproperlyConfigured: AUTH_USER_MODEL refers to model 'auth.CustomUser' that has not been installed
 
 Time zone-aware ``day``, ``month``, and ``week_day`` lookups
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -792,22 +817,6 @@ as JSON requires string keys, you will likely run into problems if you are
 using non-string keys in ``request.session``. See the
 :ref:`session_serialization` documentation for more details.
 
-4096-byte limit on passwords
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. note::
-    This behavior was also added in the Django 1.5.4 and 1.4.8 security
-    releases.
-
-Historically, Django has imposed no length limit on plaintext
-passwords. This enables a denial-of-service attack through submission
-of bogus but extremely large passwords, tying up server resources
-performing the (expensive, and increasingly expensive with the length
-of the password) calculation of the corresponding hash.
-
-Django now imposes a 4096-byte limit on password length, and will fail
-authentication with any submitted password of greater length.
-
 Miscellaneous
 ~~~~~~~~~~~~~
 
@@ -827,6 +836,14 @@ Miscellaneous
   field documentation for details about the names of the placeholders. The
   changes in 1.6 particularly affect :class:`~django.forms.DecimalField` and
   :class:`~django.forms.ModelMultipleChoiceField`.
+
+* Some :attr:`~django.forms.Field.error_messages` for
+  :class:`~django.forms.IntegerField`,
+  :class:`~django.forms.EmailField`,
+  :class:`~django.forms.IPAddressField`,
+  :class:`~django.forms.GenericIPAddressField`, and
+  :class:`~django.forms.SlugField` have been suppressed because they
+  duplicated error messages already provided by validators tied to the fields.
 
 * There have been changes in the way timeouts are handled in cache backends.
   Explicitly passing in ``timeout=None`` no longer results in using the
@@ -896,6 +913,16 @@ Miscellaneous
 * The :djadminopt:`--keep-pot` option was added to :djadmin:`makemessages`
   to prevent django from deleting the temporary .pot file it generates before
   creating the .po file.
+
+* The undocumented ``django.core.servers.basehttp.WSGIServerException`` has
+  been removed. Use ``socket.error`` provided by the standard library instead.
+  This change was also released in Django 1.5.5.
+
+* The signature of :meth:`django.views.generic.base.RedirectView.get_redirect_url`
+  has changed and now accepts positional arguments as well (``*args, **kwargs``).
+  Any unnamed captured group will now be passed to ``get_redirect_url()``
+  which may result in a ``TypeError`` if you don't update the signature of your
+  custom method.
 
 Features deprecated in 1.6
 ==========================

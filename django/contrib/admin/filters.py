@@ -16,6 +16,7 @@ from django.contrib.admin.utils import (get_model_from_relation,
     reverse_field_path, get_limit_choices_to_from_path, prepare_lookup_value)
 from django.contrib.admin.options import IncorrectLookupParameters
 
+
 class ListFilter(object):
     title = None  # Human-readable title to appear in the right sidebar.
     template = 'admin/filter.html'
@@ -166,9 +167,8 @@ class RelatedFieldListFilter(FieldListFilter):
             rel_name = other_model._meta.pk.name
         self.lookup_kwarg = '%s__%s__exact' % (field_path, rel_name)
         self.lookup_kwarg_isnull = '%s__isnull' % field_path
-        self.lookup_val = request.GET.get(self.lookup_kwarg, None)
-        self.lookup_val_isnull = request.GET.get(
-                                      self.lookup_kwarg_isnull, None)
+        self.lookup_val = request.GET.get(self.lookup_kwarg)
+        self.lookup_val_isnull = request.GET.get(self.lookup_kwarg_isnull)
         self.lookup_choices = field.get_choices(include_blank=False)
         super(RelatedFieldListFilter, self).__init__(
             field, request, params, model, model_admin, field_path)
@@ -218,8 +218,8 @@ class RelatedFieldListFilter(FieldListFilter):
             }
 
 FieldListFilter.register(lambda f: (
-        bool(f.rel) if hasattr(f, 'rel') else
-        isinstance(f, models.related.RelatedObject)), RelatedFieldListFilter)
+    bool(f.rel) if hasattr(f, 'rel') else
+    isinstance(f, models.related.RelatedObject)), RelatedFieldListFilter)
 
 
 class BooleanFieldListFilter(FieldListFilter):
@@ -242,16 +242,16 @@ class BooleanFieldListFilter(FieldListFilter):
             yield {
                 'selected': self.lookup_val == lookup and not self.lookup_val2,
                 'query_string': cl.get_query_string({
-                        self.lookup_kwarg: lookup,
-                    }, [self.lookup_kwarg2]),
+                    self.lookup_kwarg: lookup,
+                }, [self.lookup_kwarg2]),
                 'display': title,
             }
         if isinstance(self.field, models.NullBooleanField):
             yield {
                 'selected': self.lookup_val2 == 'True',
                 'query_string': cl.get_query_string({
-                        self.lookup_kwarg2: 'True',
-                    }, [self.lookup_kwarg]),
+                    self.lookup_kwarg2: 'True',
+                }, [self.lookup_kwarg]),
                 'display': _('Unknown'),
             }
 
@@ -279,7 +279,7 @@ class ChoicesFieldListFilter(FieldListFilter):
             yield {
                 'selected': smart_text(lookup) == self.lookup_val,
                 'query_string': cl.get_query_string({
-                                    self.lookup_kwarg: lookup}),
+                    self.lookup_kwarg: lookup}),
                 'display': title,
             }
 
@@ -303,6 +303,11 @@ class DateFieldListFilter(FieldListFilter):
         else:       # field is a models.DateField
             today = now.date()
         tomorrow = today + datetime.timedelta(days=1)
+        if today.month == 12:
+            next_month = today.replace(year=today.year + 1, month=1, day=1)
+        else:
+            next_month = today.replace(month=today.month + 1, day=1)
+        next_year = today.replace(year=today.year + 1, month=1, day=1)
 
         self.lookup_kwarg_since = '%s__gte' % field_path
         self.lookup_kwarg_until = '%s__lt' % field_path
@@ -318,11 +323,11 @@ class DateFieldListFilter(FieldListFilter):
             }),
             (_('This month'), {
                 self.lookup_kwarg_since: str(today.replace(day=1)),
-                self.lookup_kwarg_until: str(tomorrow),
+                self.lookup_kwarg_until: str(next_month),
             }),
             (_('This year'), {
                 self.lookup_kwarg_since: str(today.replace(month=1, day=1)),
-                self.lookup_kwarg_until: str(tomorrow),
+                self.lookup_kwarg_until: str(next_year),
             }),
         )
         super(DateFieldListFilter, self).__init__(
@@ -336,7 +341,7 @@ class DateFieldListFilter(FieldListFilter):
             yield {
                 'selected': self.date_params == param_dict,
                 'query_string': cl.get_query_string(
-                                    param_dict, [self.field_generic]),
+                    param_dict, [self.field_generic]),
                 'display': title,
             }
 

@@ -1,8 +1,6 @@
 import datetime
 import time
 
-from django.db.utils import DatabaseError
-
 try:
     from django.utils.six.moves import _thread as thread
 except ImportError:
@@ -16,7 +14,7 @@ from django.db import DEFAULT_DB_ALIAS
 from django.db.backends.signals import connection_created
 from django.db.backends import utils
 from django.db.transaction import TransactionManagementError
-from django.db.utils import DatabaseErrorWrapper
+from django.db.utils import DatabaseError, DatabaseErrorWrapper, ProgrammingError
 from django.utils.functional import cached_property
 from django.utils import six
 from django.utils import timezone
@@ -361,6 +359,12 @@ class BaseDatabaseWrapper(object):
             raise TransactionManagementError(
                 "This is forbidden when an 'atomic' block is active.")
 
+    def validate_no_broken_transaction(self):
+        if self.needs_rollback:
+            raise TransactionManagementError(
+                "An error occurred in the current transaction. You can't "
+                "execute queries until the end of the 'atomic' block.")
+
     def abort(self):
         """
         Roll back any ongoing transaction and clean the transaction state
@@ -638,6 +642,9 @@ class BaseDatabaseFeatures(object):
     # when autocommit is disabled? http://bugs.python.org/issue8145#msg109965
     autocommits_when_autocommit_is_off = False
 
+    # Does the backend prevent running SQL queries in broken transactions?
+    atomic_transactions = True
+
     # Can we roll back DDL in a transaction?
     can_rollback_ddl = False
 
@@ -663,6 +670,9 @@ class BaseDatabaseFeatures(object):
 
     # Does the backend require a connection reset after each material schema change?
     connection_persists_old_columns = False
+
+    # What kind of error does the backend throw when accessing closed cursor?
+    closed_cursor_error_class = ProgrammingError
 
     def __init__(self, connection):
         self.connection = connection
@@ -1167,7 +1177,7 @@ class BaseDatabaseOperations(object):
         Coerce the value returned by the database backend into a consistent type
         that is compatible with the field type.
         """
-        if value is None:
+        if value is None or field is None:
             return value
         internal_type = field.get_internal_type()
         if internal_type == 'FloatField':
@@ -1262,10 +1272,8 @@ class BaseDatabaseIntrospection(object):
         from django.db import models, router
         tables = set()
         for app in models.get_apps():
-            for model in models.get_models(app):
+            for model in router.get_migratable_models(app, self.connection.alias):
                 if not model._meta.managed:
-                    continue
-                if not router.allow_migrate(self.connection.alias, model):
                     continue
                 tables.add(model._meta.db_table)
                 tables.update(f.m2m_db_table() for f in model._meta.local_many_to_many)
@@ -1284,9 +1292,7 @@ class BaseDatabaseIntrospection(object):
         from django.db import models, router
         all_models = []
         for app in models.get_apps():
-            for model in models.get_models(app):
-                if router.allow_migrate(self.connection.alias, model):
-                    all_models.append(model)
+            all_models.extend(router.get_migratable_models(app, self.connection.alias))
         tables = list(map(self.table_name_converter, tables))
         return set([
             m for m in all_models
@@ -1301,12 +1307,10 @@ class BaseDatabaseIntrospection(object):
         sequence_list = []
 
         for app in apps:
-            for model in models.get_models(app):
+            for model in router.get_migratable_models(app, self.connection.alias):
                 if not model._meta.managed:
                     continue
                 if model._meta.swapped:
-                    continue
-                if not router.allow_migrate(self.connection.alias, model):
                     continue
                 for f in model._meta.local_fields:
                     if isinstance(f, models.AutoField):

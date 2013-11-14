@@ -1,6 +1,7 @@
 import re
 import textwrap
 from .base import Operation
+from django.utils import six
 
 
 class SeparateDatabaseAndState(Operation):
@@ -32,7 +33,7 @@ class SeparateDatabaseAndState(Operation):
         base_state = to_state
         for pos, database_operation in enumerate(reversed(self.database_operations)):
             to_state = base_state.clone()
-            for dbop in self.database_operations[:-(pos+1)]:
+            for dbop in self.database_operations[:-(pos + 1)]:
                 dbop.state_forwards(app_label, to_state)
             from_state = base_state.clone()
             database_operation.state_forwards(app_label, from_state)
@@ -106,13 +107,25 @@ class RunPython(Operation):
     reduces_to_sql = False
     reversible = False
 
-    def __init__(self, code):
-        # Trim any leading whitespace that is at the start of all code lines
-        # so users can nicely indent code in migration files
-        code = textwrap.dedent(code)
-        # Run the code through a parser first to make sure it's at least
-        # syntactically correct
-        self.code = compile(code, "<string>", "exec")
+    def __init__(self, code, reverse_code=None):
+        # Forwards code
+        if isinstance(code, six.string_types):
+            # Trim any leading whitespace that is at the start of all code lines
+            # so users can nicely indent code in migration files
+            code = textwrap.dedent(code)
+            # Run the code through a parser first to make sure it's at least
+            # syntactically correct
+            self.code = compile(code, "<string>", "exec")
+        else:
+            self.code = code
+        # Reverse code
+        if reverse_code is None:
+            self.reverse_code = None
+        elif isinstance(reverse_code, six.string_types):
+            reverse_code = textwrap.dedent(reverse_code)
+            self.reverse_code = compile(reverse_code, "<string>", "exec")
+        else:
+            self.reverse_code = reverse_code
 
     def state_forwards(self, app_label, state):
         # RunPython objects have no state effect. To add some, combine this
@@ -124,14 +137,26 @@ class RunPython(Operation):
         # object, representing the versioned models as an AppCache.
         # We could try to override the global cache, but then people will still
         # use direct imports, so we go with a documentation approach instead.
-        context = {
-            "models": from_state.render(),
-            "schema_editor": schema_editor,
-        }
-        eval(self.code, context)
+        if callable(self.code):
+            self.code(models=from_state.render(), schema_editor=schema_editor)
+        else:
+            context = {
+                "models": from_state.render(),
+                "schema_editor": schema_editor,
+            }
+            eval(self.code, context)
 
     def database_backwards(self, app_label, schema_editor, from_state, to_state):
-        raise NotImplementedError("You cannot reverse this operation")
+        if self.reverse_code is None:
+            raise NotImplementedError("You cannot reverse this operation")
+        elif callable(self.reverse_code):
+            self.reverse_code(models=from_state.render(), schema_editor=schema_editor)
+        else:
+            context = {
+                "models": from_state.render(),
+                "schema_editor": schema_editor,
+            }
+            eval(self.reverse_code, context)
 
     def describe(self):
         return "Raw Python operation"

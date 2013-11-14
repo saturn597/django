@@ -9,20 +9,6 @@ import sys
 import tempfile
 import warnings
 
-def upath(path):
-    """
-    Separate version of django.utils._os.upath. The django.utils version isn't
-    usable here, as upath is needed for RUNTESTS_DIR which is needed before
-    django can be imported.
-    """
-    if sys.version_info[0] != 3 and not isinstance(path, bytes):
-        fs_encoding = sys.getfilesystemencoding() or sys.getdefaultencoding()
-        return path.decode(fs_encoding)
-    return path
-
-RUNTESTS_DIR = os.path.abspath(os.path.dirname(upath(__file__)))
-sys.path.insert(0, os.path.dirname(RUNTESTS_DIR))  # 'tests/../'
-
 from django import contrib
 from django.utils._os import upath
 from django.utils import six
@@ -32,6 +18,7 @@ CONTRIB_MODULE_PATH = 'django.contrib'
 TEST_TEMPLATE_DIR = 'templates'
 
 CONTRIB_DIR = os.path.dirname(upath(contrib.__file__))
+RUNTESTS_DIR = os.path.abspath(os.path.dirname(upath(__file__)))
 
 TEMP_DIR = tempfile.mkdtemp(prefix='django_')
 os.environ['DJANGO_TEST_TEMP_DIR'] = TEMP_DIR
@@ -98,9 +85,12 @@ def get_installed():
 
 
 def setup(verbosity, test_labels):
+    import django
     from django.conf import settings
     from django.db.models.loading import get_apps, load_app
     from django.test import TransactionTestCase, TestCase
+
+    print("Testing against Django installed in '%s'" % os.path.dirname(django.__file__))
 
     # Force declaring available_apps in TransactionTestCase for faster tests.
     def no_available_apps(self):
@@ -165,9 +155,9 @@ def setup(verbosity, test_labels):
             module_found_in_labels = True
         else:
             match = lambda label: (
-                module_label == label or # exact match
-                module_label.startswith(label + '.') # ancestor match
-                )
+                module_label == label or  # exact match
+                module_label.startswith(label + '.')  # ancestor match
+            )
 
             module_found_in_labels = any(match(l) for l in test_labels_set)
 
@@ -181,16 +171,23 @@ def setup(verbosity, test_labels):
 
     return state
 
+
 def teardown(state):
     from django.conf import settings
-    # Removing the temporary TEMP_DIR. Ensure we pass in unicode
-    # so that it will successfully remove temp trees containing
-    # non-ASCII filenames on Windows. (We're assuming the temp dir
-    # name itself does not contain non-ASCII characters.)
-    shutil.rmtree(six.text_type(TEMP_DIR))
+
+    try:
+        # Removing the temporary TEMP_DIR. Ensure we pass in unicode
+        # so that it will successfully remove temp trees containing
+        # non-ASCII filenames on Windows. (We're assuming the temp dir
+        # name itself does not contain non-ASCII characters.)
+        shutil.rmtree(six.text_type(TEMP_DIR))
+    except OSError:
+        print('Failed to remove temp directory: %s' % TEMP_DIR)
+
     # Restore the old settings.
     for key, value in state.items():
         setattr(settings, key, value)
+
 
 def django_tests(verbosity, interactive, failfast, test_labels):
     from django.conf import settings
@@ -280,6 +277,7 @@ def bisect_tests(bisection_label, options, test_labels):
         print("***** Source of error: %s" % test_labels[0])
     teardown(state)
 
+
 def paired_tests(paired_test, options, test_labels):
     state = setup(int(options.verbosity), test_labels)
 
@@ -314,6 +312,7 @@ def paired_tests(paired_test, options, test_labels):
 
     print('***** No problem pair found')
     teardown(state)
+
 
 if __name__ == "__main__":
     from optparse import OptionParser

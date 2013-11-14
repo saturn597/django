@@ -98,6 +98,7 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
     formfield_overrides = {}
     readonly_fields = ()
     ordering = None
+    view_on_site = True
 
     # validation
     validator_class = validation.BaseValidator
@@ -150,13 +151,12 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
             # rendered output. formfield can be None if it came from a
             # OneToOneField with parent_link=True or a M2M intermediary.
             if formfield and db_field.name not in self.raw_id_fields:
-                related_modeladmin = self.admin_site._registry.get(
-                                                            db_field.rel.to)
+                related_modeladmin = self.admin_site._registry.get(db_field.rel.to)
                 can_add_related = bool(related_modeladmin and
-                            related_modeladmin.has_add_permission(request))
+                    related_modeladmin.has_add_permission(request))
                 formfield.widget = widgets.RelatedFieldWidgetWrapper(
-                            formfield.widget, db_field.rel, self.admin_site,
-                            can_add_related=can_add_related)
+                    formfield.widget, db_field.rel, self.admin_site,
+                    can_add_related=can_add_related)
 
             return formfield
 
@@ -244,6 +244,19 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
 
         return db_field.formfield(**kwargs)
 
+    def get_view_on_site_url(self, obj=None):
+        if obj is None or not self.view_on_site:
+            return None
+
+        if callable(self.view_on_site):
+            return self.view_on_site(obj)
+        elif self.view_on_site:
+            # use the ContentType lookup if view_on_site is True
+            return reverse('admin:view_on_site', kwargs={
+                'content_type_id': ContentType.objects.get_for_model(obj).pk,
+                'object_id': obj.pk
+            })
+
     @property
     def declared_fieldsets(self):
         warnings.warn(
@@ -319,6 +332,8 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         return qs
 
     def lookup_allowed(self, lookup, value):
+        from django.contrib.admin.filters import SimpleListFilter
+
         model = self.model
         # Check FKey lookups that are allowed, so that popups produced by
         # ForeignKeyRawIdWidget, on the basis of ForeignKey.limit_choices_to,
@@ -348,6 +363,10 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
                 # later.
                 return True
             if hasattr(field, 'rel'):
+                if field.rel is None:
+                    # This property or relation doesn't exist, but it's allowed
+                    # since it's ignored in ChangeList.get_filters().
+                    return True
                 model = field.rel.to
                 rel_name = field.rel.get_related_field().name
             elif isinstance(field, RelatedObject):
@@ -361,7 +380,15 @@ class BaseModelAdmin(six.with_metaclass(RenameBaseModelAdminMethods)):
         if len(parts) == 1:
             return True
         clean_lookup = LOOKUP_SEP.join(parts)
-        return clean_lookup in self.list_filter or clean_lookup == self.date_hierarchy
+        valid_lookups = [self.date_hierarchy]
+        for filter_item in self.list_filter:
+            if isinstance(filter_item, type) and issubclass(filter_item, SimpleListFilter):
+                valid_lookups.append(filter_item.parameter_name)
+            elif isinstance(filter_item, (list, tuple)):
+                valid_lookups.append(filter_item[0])
+            else:
+                valid_lookups.append(filter_item)
+        return clean_lookup in valid_lookups
 
     def has_add_permission(self, request):
         """
@@ -794,7 +821,7 @@ class ModelAdmin(BaseModelAdmin):
         on the changelist. The list_display parameter is the list of fields
         returned by get_list_display().
         """
-        if self.list_display_links or not list_display:
+        if self.list_display_links or self.list_display_links is None or not list_display:
             return self.list_display_links
         else:
             # Use only the first item in list_display as link
@@ -958,6 +985,7 @@ class ModelAdmin(BaseModelAdmin):
         app_label = opts.app_label
         preserved_filters = self.get_preserved_filters(request)
         form_url = add_preserved_filters({'preserved_filters': preserved_filters, 'opts': opts}, form_url)
+        view_on_site_url = self.get_view_on_site_url(obj)
         context.update({
             'add': add,
             'change': change,
@@ -965,7 +993,8 @@ class ModelAdmin(BaseModelAdmin):
             'has_change_permission': self.has_change_permission(request, obj),
             'has_delete_permission': self.has_delete_permission(request, obj),
             'has_file_field': True,  # FIXME - this should check if form or formsets have a FileField,
-            'has_absolute_url': hasattr(self.model, 'get_absolute_url'),
+            'has_absolute_url': view_on_site_url is not None,
+            'absolute_url': view_on_site_url,
             'form_url': form_url,
             'opts': opts,
             'content_type_id': ContentType.objects.get_for_model(self.model).id,
@@ -1004,7 +1033,7 @@ class ModelAdmin(BaseModelAdmin):
                 attr = obj._meta.pk.attname
             value = obj.serializable_value(attr)
             return SimpleTemplateResponse('admin/popup_response.html', {
-                'pk_value': escape(pk_value), # for possible backwards-compatibility
+                'pk_value': escape(pk_value),  # for possible backwards-compatibility
                 'value': escape(value),
                 'obj': escapejs(obj)
             })
@@ -1182,11 +1211,11 @@ class ModelAdmin(BaseModelAdmin):
 
         opts = self.model._meta
 
-        self.message_user(request, _(
-            'The %(name)s "%(obj)s" was deleted successfully.') % {
-                                   'name': force_text(opts.verbose_name),
-                                   'obj': force_text(obj_display)},
-                          messages.SUCCESS)
+        self.message_user(request,
+            _('The %(name)s "%(obj)s" was deleted successfully.') % {
+                'name': force_text(opts.verbose_name),
+                'obj': force_text(obj_display)
+            }, messages.SUCCESS)
 
         if self.has_change_permission(request, None):
             post_url = reverse('admin:%s_%s_changelist' %
@@ -1207,10 +1236,10 @@ class ModelAdmin(BaseModelAdmin):
 
         return TemplateResponse(request,
             self.delete_confirmation_template or [
-            "admin/{}/{}/delete_confirmation.html".format(app_label, opts.model_name),
-            "admin/{}/delete_confirmation.html".format(app_label),
-            "admin/delete_confirmation.html"
-       ], context, current_app=self.admin_site.name)
+                "admin/{}/{}/delete_confirmation.html".format(app_label, opts.model_name),
+                "admin/{}/delete_confirmation.html".format(app_label),
+                "admin/delete_confirmation.html"
+            ], context, current_app=self.admin_site.name)
 
     @csrf_protect_m
     @transaction.atomic
@@ -1270,8 +1299,10 @@ class ModelAdmin(BaseModelAdmin):
         context = dict(self.admin_site.each_context(),
             title=_('Add %s') % force_text(opts.verbose_name),
             adminform=adminForm,
-            is_popup=IS_POPUP_VAR in request.REQUEST,
-            to_field=request.REQUEST.get(TO_FIELD_VAR),
+            is_popup=(IS_POPUP_VAR in request.POST or
+                      IS_POPUP_VAR in request.GET),
+            to_field=request.POST.get(TO_FIELD_VAR,
+                                      request.GET.get(TO_FIELD_VAR)),
             media=media,
             inline_admin_formsets=inline_admin_formsets,
             errors=helpers.AdminErrorList(form, formsets),
@@ -1297,9 +1328,9 @@ class ModelAdmin(BaseModelAdmin):
             raise Http404(_('%(name)s object with primary key %(key)r does not exist.') % {'name': force_text(opts.verbose_name), 'key': escape(object_id)})
 
         if request.method == 'POST' and "_saveasnew" in request.POST:
-            return self.add_view(request, form_url=reverse('admin:%s_%s_add' %
-                                    (opts.app_label, opts.model_name),
-                                    current_app=self.admin_site.name))
+            return self.add_view(request, form_url=reverse('admin:%s_%s_add' % (
+                opts.app_label, opts.model_name),
+                current_app=self.admin_site.name))
 
         ModelForm = self.get_form(request, obj)
         if request.method == 'POST':
@@ -1343,8 +1374,10 @@ class ModelAdmin(BaseModelAdmin):
             adminform=adminForm,
             object_id=object_id,
             original=obj,
-            is_popup=IS_POPUP_VAR in request.REQUEST,
-            to_field=request.REQUEST.get(TO_FIELD_VAR),
+            is_popup=(IS_POPUP_VAR in request.POST or
+                      IS_POPUP_VAR in request.GET),
+            to_field=request.POST.get(TO_FIELD_VAR,
+                                      request.GET.get(TO_FIELD_VAR)),
             media=media,
             inline_admin_formsets=inline_admin_formsets,
             errors=helpers.AdminErrorList(form, formsets),
@@ -1526,7 +1559,7 @@ class ModelAdmin(BaseModelAdmin):
         if obj is None:
             raise Http404(
                 _('%(name)s object with primary key %(key)r does not exist.') %
-                    {'name': force_text(opts.verbose_name), 'key': escape(object_id)}
+                {'name': force_text(opts.verbose_name), 'key': escape(object_id)}
             )
 
         using = router.db_for_write(self.model)
